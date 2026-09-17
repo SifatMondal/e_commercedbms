@@ -4,15 +4,15 @@ import EmptyState from "./EmptyState";
 
 // Wraps a page and only renders it if the signed-in user has an allowed role.
 // Usage: <ProtectedRoute allowedRoles={["customer"]}><Cart /></ProtectedRoute>
-export default function ProtectedRoute({ allowedRoles, children }) {
+export default function ProtectedRoute({ allowedRoles, requireApprovedSeller = false, children }) {
   const { user } = useAuth();
 
   if (!user) {
     return (
       <EmptyState
-        title="Please sign in"
+        title="Please log in"
         description="You need an account to view this page."
-        action={<button onClick={() => navigate("/login")}>Sign in</button>}
+        action={<button onClick={() => navigate("/login")}>Login</button>}
       />
     );
   }
@@ -27,5 +27,8 @@ export default function ProtectedRoute({ allowedRoles, children }) {
     );
   }
 
+  if (requireApprovedSeller && user.approval_status !== "approved") {
+    return <EmptyState title="Seller approval required" description="Your seller account is awaiting an admin decision. Check Notifications for updates." action={<button onClick={() => navigate("/notifications")}>View notifications</button>} />;
+  }
   return children;
 }

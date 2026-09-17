@@ -6,6 +6,7 @@ import { createOrder } from "../services/orderService";
 import { useCart } from "../context/CartContext";
 import { useToast } from "../context/ToastContext";
 import { navigate } from "../utils/router";
+import DeliveryLocationMap from "../components/DeliveryLocationMap";
 
 const money = (value) => `$${Number(value).toFixed(2)}`;
 const TAX_RATE = 0.15;
@@ -20,6 +21,7 @@ export default function Checkout() {
   const [form, setForm] = useState({ shipping_address: "", payment_method: PAYMENT_METHODS[0] });
   const [error, setError] = useState("");
   const [placing, setPlacing] = useState(false);
+  const [deliveryLocation, setDeliveryLocation] = useState(null);
 
   useEffect(() => {
     getCart()
@@ -31,10 +33,11 @@ export default function Checkout() {
     event.preventDefault();
     setError("");
     if (!form.shipping_address.trim()) { setError("Please enter a shipping address."); return; }
+    if (!deliveryLocation) { setError("Please select and confirm a delivery location within Bangladesh."); return; }
 
     setPlacing(true);
     try {
-      const result = await createOrder(form.payment_method, form.shipping_address.trim());
+      const result = await createOrder(form.payment_method, form.shipping_address.trim(), deliveryLocation);
       refreshCartCount();
       showToast("Order placed!");
       navigate(`/orders/${result.order.order_id}`);
@@ -80,6 +83,8 @@ export default function Checkout() {
               required
             />
           </label>
+
+          <DeliveryLocationMap onLocationConfirmed={setDeliveryLocation} />
 
           <fieldset className="payment-methods">
             <legend>Payment method</legend>

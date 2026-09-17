@@ -30,6 +30,9 @@ export async function apiRequest(path, { method = "GET", body, auth = false, hea
   if (response.status === 401 && auth) {
     // Token missing/expired/invalid — clear it so the UI drops back to "signed out".
     clearStoredAuth();
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("auth:change"));
+    }
   }
 
   if (!response.ok) {

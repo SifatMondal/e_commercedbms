@@ -1,0 +1,1 @@
+const router = require("express").Router(); const auth = require("../middleware/authenticateToken"); const controller = require("../controllers/deliveryMessageController"); router.use(auth); router.get("/",controller.getMessages); router.post("/",controller.sendMessage); module.exports=router;

@@ -79,7 +79,7 @@ button:disabled { cursor: wait; opacity: .7; }
 .product-controls input[type="number"] { max-width: 130px; }
 
 /* ===================== Cart page ===================== */
-.cart-page, .checkout-page, .orders-page, .order-detail-page, .seller-dashboard, .seller-products-page, .seller-orders-page, .seller-form { width: min(1160px, 100%); margin: 35px auto 60px; }
+.cart-page, .checkout-page, .orders-page, .order-detail-page, .seller-dashboard, .seller-products-page, .seller-orders-page, .seller-form, .admin-dashboard { width: min(1160px, 100%); margin: 35px auto 60px; }
 .cart-layout, .checkout-layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 24px; align-items: start; }
 .cart-item-list, .order-item-list { display: grid; gap: 14px; margin: 0; padding: 0; list-style: none; }
 .cart-item { display: grid; grid-template-columns: 68px minmax(0, 1fr) auto auto auto; align-items: center; gap: 14px; padding: 14px; background: white; border: 1px solid #e4e7ec; border-radius: 12px; }
@@ -104,6 +104,16 @@ button:disabled { cursor: wait; opacity: .7; }
 .checkout-form textarea { width: 100%; padding: 11px 12px; color: #182230; border: 1px solid #d0d5dd; border-radius: 8px; font: inherit; resize: vertical; }
 .payment-methods { display: grid; grid-template-columns: repeat(2, 1fr); gap: 9px; margin: 0; padding: 0; border: 0; }
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+/* ===================== Delivery location ===================== */
+.delivery-location { display: grid; gap: 12px; padding: 16px; border: 1px solid #dbe5f4; border-radius: 10px; background: #f8fbff; }
+.delivery-location h2 { margin: 0; font-size: 1rem; }
+.delivery-location .hint { margin: 4px 0 0; }
+.delivery-map { height: 340px; overflow: hidden; border: 1px solid #cddbf0; border-radius: 9px; }
+.location-coordinates, .delivery-details { display: grid; gap: 3px; color: #475467; font-size: .86rem; }
+.location-coordinates strong, .delivery-details strong { color: #1d2939; }
+.confirm-location-btn { width: max-content; padding: 9px 13px; color: white; border: 0; border-radius: 7px; background: #2359c4; font-weight: 700; }
+@media (max-width: 650px) { .delivery-map { height: 290px; } }
 
 /* ===================== Orders list & detail ===================== */
 .order-list { display: grid; gap: 14px; margin: 24px 0 0; padding: 0; list-style: none; }

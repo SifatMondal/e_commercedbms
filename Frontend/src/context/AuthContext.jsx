@@ -1,14 +1,30 @@
-import { createContext, useContext, useState, useCallback } from "react";
+import { createContext, useContext, useState, useCallback, useEffect } from "react";
 import * as authService from "../services/authService";
 
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(authService.getStoredUser);
+  const [user, setUser] = useState(() => authService.getStoredUser());
+
+  useEffect(() => {
+    function handleAuthSync() {
+      setUser(authService.getStoredUser());
+    }
+
+    window.addEventListener("auth:change", handleAuthSync);
+    window.addEventListener("storage", handleAuthSync);
+    return () => {
+      window.removeEventListener("auth:change", handleAuthSync);
+      window.removeEventListener("storage", handleAuthSync);
+    };
+  }, []);
 
   const login = useCallback(async (details) => {
     const result = await authService.login(details);
     setUser(result.user);
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("auth:change"));
+    }
     return result;
   }, []);
 
@@ -17,6 +33,9 @@ export function AuthProvider({ children }) {
   const logout = useCallback(() => {
     authService.logout();
     setUser(null);
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("auth:change"));
+    }
   }, []);
 
   return (

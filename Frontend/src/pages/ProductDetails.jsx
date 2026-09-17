@@ -61,7 +61,7 @@ export default function ProductDetails({ productId }) {
   }, [productId]);
 
   async function handleAddToCart() {
-    if (!user) { setMessage("Please sign in as a customer before adding an item to your cart."); return; }
+    if (!user) { setMessage("Please log in as a customer before adding an item to your cart."); return; }
     if (user.role !== "customer") { setMessage("Only customer accounts can use a cart."); return; }
     setAdding(true);
     setMessage("");
@@ -161,7 +161,7 @@ export default function ProductDetails({ productId }) {
           ) : (
             <button disabled>Out of stock</button>
           )}
-          {!user && <button className="text-button login-prompt" onClick={() => navigate("/login")}>Sign in to add to cart</button>}
+          {!user && <button className="text-button login-prompt" onClick={() => navigate("/login")}>Login to add to cart</button>}
           {message && <p className={message.toLowerCase().includes("added") || message.toLowerCase().includes("increased") ? "message success" : "message error"} role="status">{message}</p>}
         </div>
       </article>

@@ -37,9 +37,10 @@ export default function Register() {
     <section className="auth-card">
       <p className="eyebrow">Get started</p>
       <h1>Create your account</h1>
-      <p className="subtext">Register as a customer or seller.</p>
+      <p className="subtext">Register as a customer, seller, or deliveryman.</p>
       <form onSubmit={submit} noValidate>
         <RoleSelector value={form.role} onChange={(role) => update("role", role)} />
+        {form.role === "deliveryman" && <label>Delivery area <input type="text" value={form.delivery_location || ""} onChange={(event) => update("delivery_location", event.target.value)} maxLength="250" placeholder="e.g. Dhaka" /></label>}
         <label>Full name<input type="text" value={form.name} onChange={(event) => update("name", event.target.value)} autoComplete="name" maxLength="150" required /></label>
         <label>Email<input type="email" value={form.email} onChange={(event) => update("email", event.target.value)} autoComplete="email" required /></label>
         <label>Phone<input type="tel" value={form.phone} onChange={(event) => update("phone", event.target.value)} autoComplete="tel" maxLength="30" required /></label>
@@ -48,7 +49,7 @@ export default function Register() {
         {success && <p className="message success" role="status">{success}</p>}
         <button type="submit" disabled={loading}>{loading ? "Creating account…" : "Create account"}</button>
       </form>
-      <p className="switch">Already have an account? <button className="text-button" onClick={() => navigate("/login")}>Sign in</button></p>
+      <p className="switch">Already have an account? <button className="text-button" onClick={() => navigate("/login")}>Login</button></p>
     </section>
   );
 }

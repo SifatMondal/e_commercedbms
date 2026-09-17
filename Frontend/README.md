@@ -128,10 +128,9 @@ npm run preview    # serve that build locally to double check it
 I want to be upfront about a few things I worked around rather than papered over:
 
 1. **No "list categories" endpoint.** Your schema has a `categories` table, but no route reads it directly. The product form derives its category dropdown from whatever categories already exist on products returned by `GET /api/products`. **If you have zero products so far, the dropdown will be empty** — insert at least one row into `categories` manually (`INSERT INTO categories (category_name) VALUES ('Electronics');`) before creating your first product.
-2. **No admin role in the database.** Your `schema.sql` only has `customers` and `sellers` — there's no `admins` table and no admin routes. I did not build fake admin screens; see the feature suggestions below if you want to add this.
-3. **Checkout tax is a display-only estimate.** `orderController.js` stores `total_amount` as just the item subtotal — it doesn't add tax. The checkout/cart pages show a 15% "estimate" line so the UI looks complete, but the amount actually charged/stored is the subtotal. If you want tax to be real, add it in `orderController.js`'s `createOrder`.
-4. **Wishlist is client-only.** There's no `wishlist` table in your schema, so hearted products are saved in the browser's `localStorage`, per account. They won't follow you to a different browser/device, and clearing browser data clears them.
-5. **`updateSellerOrderStatus` warns that status is per-order, not per-seller-item.** If two different sellers' products end up in the same order, one seller updating the status affects the whole order. That's a backend design tradeoff, not something the frontend can fix.
+2. **Checkout tax is a display-only estimate.** `orderController.js` stores `total_amount` as just the item subtotal — it doesn't add tax. The checkout/cart pages show a 15% "estimate" line so the UI looks complete, but the amount actually charged/stored is the subtotal. If you want tax to be real, add it in `orderController.js`'s `createOrder`.
+3. **Wishlist is client-only.** There's no `wishlist` table in your schema, so hearted products are saved in the browser's `localStorage`, per account. They won't follow you to a different browser/device, and clearing browser data clears them.
+4. **`updateSellerOrderStatus` warns that status is per-order, not per-seller-item.** If two different sellers' products end up in the same order, one seller updating the status affects the whole order. That's a backend design tradeoff, not something the frontend can fix.
 
 ---
 
@@ -148,7 +147,6 @@ Roughly ordered by effort vs. payoff for a university project:
 **Medium effort:**
 - **Password reset / forgot password flow.**
 - **Seller analytics chart** on the dashboard (you already have the order data — a simple bar chart of revenue by day/week with a library like `recharts` would look great in a viva/demo).
-- **Admin role**: add an `admins` table, an `is_active`/`is_banned` column on sellers, and endpoints to approve new seller accounts or ban abusive ones. This matches the original "Admin routes" idea from your prompt but needs real backend + schema support first — I didn't fake this in the frontend since there's nothing behind it yet.
 - **Real tax/shipping calculation** stored server-side instead of the frontend's display-only estimate.
 
 **Nice-to-have polish:**

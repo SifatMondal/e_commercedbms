@@ -6,6 +6,7 @@ import ProductImage from "../components/ProductImage";
 import { getOrder, cancelOrder } from "../services/orderService";
 import { useToast } from "../context/ToastContext";
 import { navigate } from "../utils/router";
+import DeliveryChat from "../components/DeliveryChat";
 
 const money = (value) => `$${Number(value).toFixed(2)}`;
 const formatDate = (value) => new Date(value).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
@@ -88,6 +89,14 @@ export default function OrderDetail({ orderId }) {
         <h2>Order details</h2>
         <div className="summary-row"><span>Payment method</span><span>{order.payment_method}</span></div>
         <div className="summary-row"><span>Shipping address</span><span>{order.shipping_address}</span></div>
+        {order.deliveryman_name ? <div className="delivery-details"><strong>Deliveryman</strong><span>{order.deliveryman_name}</span><span>{order.deliveryman_phone}</span><span>Status: {order.delivery_status?.replaceAll("_", " ")}</span><span>ETA: {order.estimated_delivery_time ? new Date(order.estimated_delivery_time).toLocaleString() : "Not set yet"}</span><DeliveryChat orderId={order.order_id} /></div> : <p className="hint">Deliveryman will be assigned shortly.</p>}
+        {order.delivery_latitude !== null && order.delivery_longitude !== null && (
+          <div className="delivery-details">
+            <strong>Delivery location</strong>
+            <span>Latitude: {Number(order.delivery_latitude).toFixed(6)}</span>
+            <span>Longitude: {Number(order.delivery_longitude).toFixed(6)}</span>
+          </div>
+        )}
         <div className="summary-row summary-total"><span>Total</span><span>{money(order.total_amount)}</span></div>
         {order.status === "Pending" && (
           <button className="text-button remove-link" onClick={handleCancel} disabled={cancelling}>

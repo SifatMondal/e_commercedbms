@@ -41,7 +41,7 @@ export default function Header() {
           </>
         )}
 
-        {user?.role === "seller" && (
+        {user?.role === "seller" && user.approval_status === "approved" && (
           <>
             <button className="nav-link" onClick={() => go("/seller/dashboard")}>Dashboard</button>
             <button className="nav-link" onClick={() => go("/seller/products")}>My Products</button>
@@ -49,7 +49,11 @@ export default function Header() {
           </>
         )}
 
-        {user && <button className="nav-link" onClick={() => go("/notifications")}>Notifications</button>}
+        {user?.role === "admin" && <button className="nav-link" onClick={() => go("/admin")}>Seller approvals</button>}
+
+        {user?.role === "deliveryman" && user.approval_status === "approved" && <button className="nav-link" onClick={() => go("/delivery/dashboard")}>Delivery dashboard</button>}
+
+        {user && user.role !== "admin" && <button className="nav-link" onClick={() => go("/notifications")}>Notifications</button>}
 
         {user ? (
           <>
@@ -57,7 +61,10 @@ export default function Header() {
             <button className="nav-link" onClick={handleLogout}>Log out</button>
           </>
         ) : (
-          <button className="nav-link" onClick={() => go("/login")}>Sign in</button>
+          <>
+            <button className="nav-link" onClick={() => go("/login")}>Login</button>
+            <button className="nav-link" onClick={() => go("/register")}>Register</button>
+          </>
         )}
       </nav>
     </header>
