@@ -329,4 +329,3 @@ exports.updateSellerOrderStatus = async (req, res) => {
         client.release();
     }
 };
-122002662006200                                                                                                                           

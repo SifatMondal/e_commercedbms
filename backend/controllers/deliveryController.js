@@ -57,7 +57,9 @@ exports.updateDelivery = async (req, res) => {
   const client = await pool.connect(); try {
     await client.query("BEGIN"); const found = await client.query("SELECT order_id,customer_id,delivery_status FROM orders WHERE order_id=$1 AND deliveryman_id=$2 FOR UPDATE", [orderId, req.user.sub]);
     if (!found.rowCount) { await client.query("ROLLBACK"); return res.status(404).json({ message: "Assigned order not found." }); }
-    const order = found.rows[0]; if (delivery_status && NEXT[order.delivery_status] !== delivery_status) { await client.query("ROLLBACK"); return res.status(409).json({ message: "Delivery status transition is not allowed." }); }
+    const order = found.rows[0];
+    const currentStatus = order.delivery_status || "assigned";
+    if (delivery_status && NEXT[currentStatus] !== delivery_status) { await client.query("ROLLBACK"); return res.status(409).json({ message: "Delivery status transition is not allowed." }); }
     const updated = await client.query("UPDATE orders SET delivery_status=COALESCE($1,delivery_status),estimated_delivery_time=COALESCE($2,estimated_delivery_time),status=CASE WHEN $1='delivered' THEN 'Delivered' ELSE status END WHERE order_id=$3 RETURNING order_id,delivery_status,estimated_delivery_time,status", [delivery_status || null, eta, orderId]);
     await createCustomerNotification(client, order.customer_id, delivery_status ? `Order #${orderId} delivery status: ${delivery_status.replaceAll("_", " ")}.` : `Order #${orderId} estimated delivery time was updated.`);
     if (delivery_status === "delivered") {

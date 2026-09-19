@@ -89,7 +89,17 @@ export default function OrderDetail({ orderId }) {
         <h2>Order details</h2>
         <div className="summary-row"><span>Payment method</span><span>{order.payment_method}</span></div>
         <div className="summary-row"><span>Shipping address</span><span>{order.shipping_address}</span></div>
-        {order.deliveryman_name ? <div className="delivery-details"><strong>Deliveryman</strong><span>{order.deliveryman_name}</span><span>{order.deliveryman_phone}</span><span>Status: {order.delivery_status?.replaceAll("_", " ")}</span><span>ETA: {order.estimated_delivery_time ? new Date(order.estimated_delivery_time).toLocaleString() : "Not set yet"}</span><DeliveryChat orderId={order.order_id} /></div> : <p className="hint">Deliveryman will be assigned shortly.</p>}
+        {order.deliveryman_name ? (
+          <div className="delivery-details">
+            <strong>Deliveryman</strong>
+            <span>{order.deliveryman_name}</span>
+            <span>{order.deliveryman_phone}</span>
+            <span>Status: {order.delivery_status?.replaceAll("_", " ")}</span>
+            <span>ETA: {order.estimated_delivery_time ? new Date(order.estimated_delivery_time).toLocaleString() : "Not set yet"}</span>
+          </div>
+        ) : (
+          <p className="hint">Deliveryman will be assigned shortly.</p>
+        )}
         {order.delivery_latitude !== null && order.delivery_longitude !== null && (
           <div className="delivery-details">
             <strong>Delivery location</strong>
