@@ -20,6 +20,8 @@ import SellerDashboard from "./pages/seller/SellerDashboard";
 import SellerProducts from "./pages/seller/SellerProducts";
 import SellerProductForm from "./pages/seller/SellerProductForm";
 import SellerOrders from "./pages/seller/SellerOrders";
+import AdminDashboard from "./pages/admin/AdminDashboard";
+import DeliveryDashboard from "./pages/delivery/DeliveryDashboard";
 
 // Every route the app understands, in the order they should be checked.
 // `params` lets a page read the piece captured by ":name" in the pattern.
@@ -33,12 +35,14 @@ const ROUTES = [
   { pattern: "/orders", render: () => <ProtectedRoute allowedRoles={["customer"]}><Orders /></ProtectedRoute> },
   { pattern: "/orders/:id", render: (params) => <ProtectedRoute allowedRoles={["customer"]}><OrderDetail orderId={params.id} /></ProtectedRoute> },
   { pattern: "/wishlist", render: () => <ProtectedRoute allowedRoles={["customer"]}><Wishlist /></ProtectedRoute> },
-  { pattern: "/notifications", render: () => <ProtectedRoute allowedRoles={["customer", "seller"]}><Notifications /></ProtectedRoute> },
-  { pattern: "/seller/dashboard", render: () => <ProtectedRoute allowedRoles={["seller"]}><SellerDashboard /></ProtectedRoute> },
-  { pattern: "/seller/products", render: () => <ProtectedRoute allowedRoles={["seller"]}><SellerProducts /></ProtectedRoute> },
-  { pattern: "/seller/products/new", render: () => <ProtectedRoute allowedRoles={["seller"]}><SellerProductForm /></ProtectedRoute> },
-  { pattern: "/seller/products/:id/edit", render: (params) => <ProtectedRoute allowedRoles={["seller"]}><SellerProductForm productId={params.id} /></ProtectedRoute> },
-  { pattern: "/seller/orders", render: () => <ProtectedRoute allowedRoles={["seller"]}><SellerOrders /></ProtectedRoute> },
+  { pattern: "/notifications", render: () => <ProtectedRoute allowedRoles={["customer", "seller", "deliveryman"]}><Notifications /></ProtectedRoute> },
+  { pattern: "/seller/dashboard", render: () => <ProtectedRoute allowedRoles={["seller"]} requireApprovedSeller><SellerDashboard /></ProtectedRoute> },
+  { pattern: "/seller/products", render: () => <ProtectedRoute allowedRoles={["seller"]} requireApprovedSeller><SellerProducts /></ProtectedRoute> },
+  { pattern: "/seller/products/new", render: () => <ProtectedRoute allowedRoles={["seller"]} requireApprovedSeller><SellerProductForm /></ProtectedRoute> },
+  { pattern: "/seller/products/:id/edit", render: (params) => <ProtectedRoute allowedRoles={["seller"]} requireApprovedSeller><SellerProductForm productId={params.id} /></ProtectedRoute> },
+  { pattern: "/seller/orders", render: () => <ProtectedRoute allowedRoles={["seller"]} requireApprovedSeller><SellerOrders /></ProtectedRoute> },
+  { pattern: "/admin", render: () => <ProtectedRoute allowedRoles={["admin"]}><AdminDashboard /></ProtectedRoute> },
+  { pattern: "/delivery/dashboard", render: () => <ProtectedRoute allowedRoles={["deliveryman"]}><DeliveryDashboard /></ProtectedRoute> },
 ];
 
 function RouteOutlet() {

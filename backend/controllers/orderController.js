@@ -1,5 +1,6 @@
 const pool = require("../db");
 const { createSellerNotification } = require("../services/notificationService");
+const { getDeliveryCoordinates, isLocationInBangladesh } = require("../services/deliveryLocationService");
 
 function requireCustomer(req, res) {
     if (req.user.role === "customer") return true;
@@ -16,6 +17,8 @@ function validateCheckout(body) {
     if (typeof body.payment_method !== "string" || body.payment_method.trim() === "") return "payment_method is required.";
     if (body.payment_method.trim().length > 100) return "payment_method must be at most 100 characters.";
     if (typeof body.shipping_address !== "string" || body.shipping_address.trim() === "") return "shipping_address is required.";
+    const coordinates = getDeliveryCoordinates(body);
+    if (!coordinates || !isLocationInBangladesh(coordinates)) return "Please select a delivery location within Bangladesh.";
     return null;
 }
 
@@ -29,6 +32,9 @@ async function rollback(client) {
 
 function sendOrderError(error, res) {
     console.error("Order database error:", error);
+    if (error.code === "42703" && /delivery_(latitude|longitude)/.test(error.message)) {
+        return res.status(500).json({ message: "Order setup is incomplete. Apply the delivery-location database migration and try again." });
+    }
     return res.status(500).json({ message: "Unable to process order request." });
 }
 
@@ -122,11 +128,12 @@ exports.createOrder = async (req, res) => {
             [cartId]
         );
         const totalAmount = totalResult.rows[0].total_amount;
+        const coordinates = getDeliveryCoordinates(req.body);
         const orderResult = await client.query(
-            `INSERT INTO orders (order_date, total_amount, payment_method, shipping_address, status, customer_id)
-             VALUES (CURRENT_DATE, $1, $2, $3, 'Pending', $4)
-             RETURNING order_id, order_date, total_amount, payment_method, shipping_address, status, customer_id`,
-            [totalAmount, req.body.payment_method.trim(), req.body.shipping_address.trim(), req.user.sub]
+            `INSERT INTO orders (order_date, total_amount, payment_method, shipping_address, delivery_latitude, delivery_longitude, status, customer_id)
+             VALUES (CURRENT_DATE, $1, $2, $3, $4, $5, 'Pending', $6)
+             RETURNING order_id, order_date, total_amount, payment_method, shipping_address, delivery_latitude, delivery_longitude, status, customer_id`,
+            [totalAmount, req.body.payment_method.trim(), req.body.shipping_address.trim(), coordinates.latitude, coordinates.longitude, req.user.sub]
         );
         const order = orderResult.rows[0];
         const createdItems = [];
@@ -166,15 +173,25 @@ exports.createOrder = async (req, res) => {
     }
 };
 
+exports.validateDeliveryLocation = (req, res) => {
+    if (!requireCustomer(req, res)) return;
+    const coordinates = getDeliveryCoordinates(req.body);
+    if (!coordinates || !isLocationInBangladesh(coordinates)) {
+        return res.status(400).json({ message: "Please select a delivery location within Bangladesh." });
+    }
+    return res.status(200).json({ message: "Delivery location is valid." });
+};
+
 exports.getOrders = async (req, res) => {
     if (!requireCustomer(req, res)) return;
 
     try {
         const ordersResult = await pool.query(
-            `SELECT order_id, order_date, total_amount, payment_method, shipping_address, status
-             FROM orders
-             WHERE customer_id = $1
-             ORDER BY order_id DESC`,
+            `SELECT o.order_id, o.order_date, o.total_amount, o.payment_method, o.shipping_address, o.delivery_latitude, o.delivery_longitude, o.status, o.delivery_status, o.estimated_delivery_time,
+                    d.name AS deliveryman_name, d.phone AS deliveryman_phone
+             FROM orders o LEFT JOIN deliverymen d ON d.deliveryman_id = o.deliveryman_id
+             WHERE o.customer_id = $1
+             ORDER BY o.order_id DESC`,
             [req.user.sub]
         );
         if (ordersResult.rowCount === 0) return res.status(200).json([]);
@@ -219,9 +236,10 @@ exports.getOrderById = async (req, res) => {
 
     try {
         const orderResult = await pool.query(
-            `SELECT order_id, order_date, total_amount, payment_method, shipping_address, status
-             FROM orders
-             WHERE order_id = $1 AND customer_id = $2`,
+            `SELECT o.order_id, o.order_date, o.total_amount, o.payment_method, o.shipping_address, o.delivery_latitude, o.delivery_longitude, o.status, o.delivery_status, o.estimated_delivery_time,
+                    d.name AS deliveryman_name, d.phone AS deliveryman_phone
+             FROM orders o LEFT JOIN deliverymen d ON d.deliveryman_id=o.deliveryman_id
+             WHERE o.order_id = $1 AND o.customer_id = $2`,
             [orderId, req.user.sub]
         );
         if (orderResult.rowCount === 0) return res.status(404).json({ message: "Order not found." });
@@ -256,7 +274,7 @@ exports.cancelOrder = async (req, res) => {
     try {
         await client.query("BEGIN");
         const orderResult = await client.query(
-            `SELECT order_id, order_date, total_amount, payment_method, shipping_address, status
+            `SELECT order_id, order_date, total_amount, payment_method, shipping_address, delivery_latitude, delivery_longitude, status
              FROM orders
              WHERE order_id = $1 AND customer_id = $2
              FOR UPDATE`,
@@ -287,7 +305,7 @@ exports.cancelOrder = async (req, res) => {
         }
 
         const cancelledOrder = await client.query(
-            "UPDATE orders SET status = 'Cancelled' WHERE order_id = $1 RETURNING order_id, order_date, total_amount, payment_method, shipping_address, status",
+            "UPDATE orders SET status = 'Cancelled' WHERE order_id = $1 RETURNING order_id, order_date, total_amount, payment_method, shipping_address, delivery_latitude, delivery_longitude, status",
             [orderId]
         );
         await client.query("COMMIT");

@@ -16,3 +16,5 @@ export const getSellerOrders = () => apiRequest("/api/seller/orders", { auth: tr
 
 export const updateSellerOrderStatus = (orderId, status) =>
   apiRequest(`/api/seller/orders/${orderId}/status`, { method: "PUT", auth: true, body: { status } });
+export const getAvailableDeliverymen = () => apiRequest("/api/seller/deliverymen/available", { auth: true });
+export const sendDeliveryRequest = (orderId, deliveryman_id) => apiRequest(`/api/seller/orders/${orderId}/delivery-requests`, { method: "POST", auth: true, body: { deliveryman_id } });

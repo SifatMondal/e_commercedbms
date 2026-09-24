@@ -1,0 +1,2 @@
+const router = require("express").Router(); const auth = require("../middleware/authenticateToken"); const controller = require("../controllers/deliveryController");
+router.use(auth, auth.requireApprovedDeliveryman); router.get("/dashboard", controller.getDashboard); router.patch("/availability", controller.setAvailability); router.patch("/requests/:requestId", controller.respondToRequest); router.patch("/orders/:orderId", controller.updateDelivery); module.exports = router;
