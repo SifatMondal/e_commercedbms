@@ -1,0 +1,831 @@
+const pool = require("../db");
+const {
+  createCustomerNotification,
+  createSellerNotification,
+  createDeliverymanNotification,
+  createAdminNotification
+} = require("../services/notificationService");
+const eventService = require("../services/eventService");
+
+const validId = (value) => typeof value === "string" && /^\d+$/.test(value) && BigInt(value) > 0n;
+
+async function checkOrderAccess(orderId, user) {
+  if (user.role === "admin") {
+    const res = await pool.query(
+      `SELECT o.order_id, o.customer_id, o.deliveryman_id, o.status,
+              c.name AS customer_name, c.email AS customer_email,
+              d.name AS deliveryman_name, d.phone AS deliveryman_phone
+       FROM orders o
+       LEFT JOIN customers c ON c.customer_id = o.customer_id
+       LEFT JOIN deliverymen d ON d.deliveryman_id = o.deliveryman_id
+       WHERE o.order_id = $1`,
+      [orderId]
+    );
+    return res.rows[0] || null;
+  }
+
+  if (user.role === "customer") {
+    const res = await pool.query(
+      `SELECT o.order_id, o.customer_id, o.deliveryman_id, o.status,
+              c.name AS customer_name, c.email AS customer_email,
+              d.name AS deliveryman_name, d.phone AS deliveryman_phone
+       FROM orders o
+       LEFT JOIN customers c ON c.customer_id = o.customer_id
+       LEFT JOIN deliverymen d ON d.deliveryman_id = o.deliveryman_id
+       WHERE o.order_id = $1 AND o.customer_id = $2`,
+      [orderId, user.sub]
+    );
+    return res.rows[0] || null;
+  }
+
+  if (user.role === "deliveryman") {
+    const res = await pool.query(
+      `SELECT o.order_id, o.customer_id, o.deliveryman_id, o.status,
+              c.name AS customer_name, c.email AS customer_email,
+              d.name AS deliveryman_name, d.phone AS deliveryman_phone
+       FROM orders o
+       LEFT JOIN customers c ON c.customer_id = o.customer_id
+       LEFT JOIN deliverymen d ON d.deliveryman_id = o.deliveryman_id
+       WHERE o.order_id = $1 AND o.deliveryman_id = $2`,
+      [orderId, user.sub]
+    );
+    return res.rows[0] || null;
+  }
+
+  if (user.role === "seller") {
+    const res = await pool.query(
+      `SELECT o.order_id, o.customer_id, o.deliveryman_id, o.status,
+              c.name AS customer_name, c.email AS customer_email,
+              d.name AS deliveryman_name, d.phone AS deliveryman_phone
+       FROM orders o
+       LEFT JOIN customers c ON c.customer_id = o.customer_id
+       LEFT JOIN deliverymen d ON d.deliveryman_id = o.deliveryman_id
+       WHERE o.order_id = $1
+         AND EXISTS (
+           SELECT 1 FROM order_items oi
+           JOIN products p ON p.product_id = oi.product_id
+           WHERE oi.order_id = o.order_id AND p.seller_id = $2
+         )`,
+      [orderId, user.sub]
+    );
+    return res.rows[0] || null;
+  }
+
+  return null;
+}
+
+// ==========================================
+// 1. UNREAD COUNT
+// ==========================================
+exports.getUnreadCount = async (req, res) => {
+  const { role, sub: userId } = req.user;
+  try {
+    let countQuery = "";
+    let params = [];
+
+    if (role === "admin") {
+      countQuery = `
+        SELECT COUNT(1)::int AS count
+        FROM delivery_messages m
+        WHERE m.is_read = FALSE
+          AND (
+            (m.recipient_role = 'admin')
+            OR (m.recipient_role IS NULL AND m.sender_role != 'admin')
+          )
+      `;
+      params = [];
+    } else if (role === "customer") {
+      countQuery = `
+        SELECT COUNT(1)::int AS count
+        FROM delivery_messages m
+        WHERE m.is_read = FALSE
+          AND (
+            (m.recipient_role = 'customer' AND m.recipient_id = $1)
+            OR (
+              m.recipient_role IS NULL
+              AND m.sender_role != 'customer'
+              AND m.order_id IN (SELECT order_id FROM orders WHERE customer_id = $1)
+            )
+          )
+      `;
+      params = [userId];
+    } else if (role === "deliveryman") {
+      countQuery = `
+        SELECT COUNT(1)::int AS count
+        FROM delivery_messages m
+        WHERE m.is_read = FALSE
+          AND (
+            (m.recipient_role = 'deliveryman' AND m.recipient_id = $1)
+            OR (
+              m.recipient_role IS NULL
+              AND m.sender_role != 'deliveryman'
+              AND m.order_id IN (SELECT order_id FROM orders WHERE deliveryman_id = $1)
+            )
+          )
+      `;
+      params = [userId];
+    } else if (role === "seller") {
+      countQuery = `
+        SELECT COUNT(1)::int AS count
+        FROM delivery_messages m
+        WHERE m.is_read = FALSE
+          AND (
+            (m.recipient_role = 'seller' AND m.recipient_id = $1)
+            OR (
+              m.recipient_role IS NULL
+              AND m.sender_role != 'seller'
+              AND m.order_id IN (
+                SELECT DISTINCT oi.order_id
+                FROM order_items oi
+                JOIN products p ON p.product_id = oi.product_id
+                WHERE p.seller_id = $1
+              )
+            )
+          )
+      `;
+      params = [userId];
+    }
+
+    const result = await pool.query(countQuery, params);
+    return res.json({ unreadCount: Number(result.rows[0]?.count || 0) });
+  } catch (e) {
+    console.error("Unread count error:", e);
+    return res.status(500).json({ message: "Unable to retrieve unread message count." });
+  }
+};
+
+// ==========================================
+// 2. ORDER PARTICIPANTS
+// ==========================================
+exports.getOrderParticipants = async (req, res) => {
+  const orderId = String(req.query.orderId || "");
+  if (!validId(orderId)) {
+    return res.status(400).json({ message: "orderId must be a positive integer." });
+  }
+
+  try {
+    const order = await checkOrderAccess(orderId, req.user);
+    if (!order) {
+      return res.status(403).json({ message: "You are not authorized to view participants for this order." });
+    }
+
+    // Sellers with products in this order
+    const sellerRes = await pool.query(
+      `SELECT DISTINCT s.seller_id, s.name AS seller_name, s.email AS seller_email
+       FROM order_items oi
+       JOIN products p ON p.product_id = oi.product_id
+       JOIN sellers s ON s.seller_id = p.seller_id
+       WHERE oi.order_id = $1
+       ORDER BY s.seller_id ASC`,
+      [orderId]
+    );
+
+    return res.json({
+      orderId: Number(order.order_id),
+      orderStatus: order.status,
+      customer: {
+        id: Number(order.customer_id),
+        name: order.customer_name || "Customer",
+        email: order.customer_email || ""
+      },
+      deliveryman: order.deliveryman_id ? {
+        id: Number(order.deliveryman_id),
+        name: order.deliveryman_name || "Deliveryman",
+        phone: order.deliveryman_phone || ""
+      } : null,
+      sellers: sellerRes.rows.map((s) => ({
+        id: Number(s.seller_id),
+        name: s.seller_name,
+        email: s.seller_email
+      })),
+      admin: {
+        role: "admin",
+        name: "Support & Admin"
+      }
+    });
+  } catch (e) {
+    console.error("Get order participants error:", e);
+    return res.status(500).json({ message: "Unable to retrieve order participants." });
+  }
+};
+
+// ==========================================
+// 3. CONVERSATIONS LIST
+// ==========================================
+exports.getConversations = async (req, res) => {
+  const { role, sub: userId } = req.user;
+  try {
+    let orderFilter = "";
+    let params = [];
+
+    if (role === "customer") {
+      orderFilter = "WHERE o.customer_id = $1";
+      params = [userId];
+    } else if (role === "deliveryman") {
+      orderFilter = "WHERE o.deliveryman_id = $1";
+      params = [userId];
+    } else if (role === "seller") {
+      orderFilter = `WHERE EXISTS (
+        SELECT 1 FROM order_items oi
+        JOIN products p ON p.product_id = oi.product_id
+        WHERE oi.order_id = o.order_id AND p.seller_id = $1
+      )`;
+      params = [userId];
+    } else if (role === "admin") {
+      orderFilter = "";
+      params = [];
+    }
+
+    const orderQuery = `
+      SELECT
+        o.order_id,
+        o.status AS order_status,
+        o.order_date,
+        c.name AS customer_name,
+        d.deliveryman_id,
+        d.name AS deliveryman_name,
+        latest.message AS last_message,
+        latest.sender_role AS last_sender_role,
+        latest.created_at AS last_message_time,
+        COALESCE(unread.unread_count, 0)::int AS unread_count
+      FROM orders o
+      LEFT JOIN customers c ON c.customer_id = o.customer_id
+      LEFT JOIN deliverymen d ON d.deliveryman_id = o.deliveryman_id
+      LEFT JOIN LATERAL (
+        SELECT message, sender_role, created_at
+        FROM delivery_messages
+        WHERE order_id = o.order_id
+        ORDER BY message_id DESC
+        LIMIT 1
+      ) latest ON true
+      LEFT JOIN LATERAL (
+        SELECT COUNT(1) AS unread_count
+        FROM delivery_messages m
+        WHERE m.order_id = o.order_id
+          AND m.is_read = FALSE
+          AND (
+            (m.recipient_role = '${role}' AND m.recipient_id = ${userId || 'NULL'})
+            OR (m.recipient_role IS NULL AND m.sender_role != '${role}')
+            OR ('${role}' = 'admin' AND m.sender_role != 'admin')
+          )
+      ) unread ON true
+      ${orderFilter}
+      ORDER BY COALESCE(latest.created_at, o.order_date::timestamptz) DESC
+      LIMIT 50
+    `;
+
+    const orderRes = await pool.query(orderQuery, params);
+    const conversations = orderRes.rows.map((row) => ({
+      type: "order",
+      order_id: row.order_id,
+      order_status: row.order_status,
+      order_date: row.order_date,
+      customer_name: row.customer_name,
+      deliveryman_id: row.deliveryman_id,
+      deliveryman_name: row.deliveryman_name,
+      last_message: row.last_message,
+      last_sender_role: row.last_sender_role,
+      last_message_time: row.last_message_time,
+      unread_count: row.unread_count
+    }));
+
+    // For non-admin (seller, deliveryman, customer), include direct Admin Support conversation
+    if (role !== "admin") {
+      const supportRes = await pool.query(
+        `SELECT
+           latest.message AS last_message,
+           latest.sender_role AS last_sender_role,
+           latest.created_at AS last_message_time,
+           COUNT(CASE WHEN m.is_read = FALSE AND m.recipient_role = $1 AND m.recipient_id = $2 THEN 1 END)::int AS unread_count
+         FROM delivery_messages m
+         LEFT JOIN LATERAL (
+           SELECT message, sender_role, created_at
+           FROM delivery_messages
+           WHERE order_id IS NULL
+             AND (
+               (sender_role = $1 AND sender_id = $2 AND recipient_role = 'admin')
+               OR (sender_role = 'admin' AND recipient_role = $1 AND recipient_id = $2)
+             )
+           ORDER BY message_id DESC
+           LIMIT 1
+         ) latest ON true
+         WHERE m.order_id IS NULL
+           AND (
+             (m.sender_role = $1 AND m.sender_id = $2 AND m.recipient_role = 'admin')
+             OR (m.sender_role = 'admin' AND m.recipient_role = $1 AND m.recipient_id = $2)
+           )
+         GROUP BY latest.message, latest.sender_role, latest.created_at`,
+        [role, userId]
+      );
+
+      const supportRow = supportRes.rows[0];
+      conversations.unshift({
+        type: "support",
+        order_id: null,
+        conversation_id: "support_admin",
+        title: "Admin Support & Appeals",
+        other_party: "Platform Admin",
+        last_message: supportRow?.last_message || "Direct channel for appeals and support inquiry.",
+        last_sender_role: supportRow?.last_sender_role || null,
+        last_message_time: supportRow?.last_message_time || null,
+        unread_count: supportRow ? Number(supportRow.unread_count || 0) : 0
+      });
+    } else {
+      // For Admin, fetch all direct support/appeal threads grouped by user
+      const adminSupportRes = await pool.query(
+        `SELECT
+           dm.other_role AS sender_role,
+           dm.other_id AS sender_id,
+           COALESCE(s.name, d.name, c.name, 'User #' || dm.other_id) AS sender_name,
+           latest.message AS last_message,
+           latest.sender_role AS last_sender_role,
+           latest.created_at AS last_message_time,
+           COALESCE(unread.unread_count, 0)::int AS unread_count
+         FROM (
+           SELECT DISTINCT
+             CASE WHEN sender_role = 'admin' THEN recipient_role ELSE sender_role END AS other_role,
+             CASE WHEN sender_role = 'admin' THEN recipient_id ELSE sender_id END AS other_id
+           FROM delivery_messages
+           WHERE order_id IS NULL
+         ) dm
+         LEFT JOIN sellers s ON s.seller_id = dm.other_id AND dm.other_role = 'seller'
+         LEFT JOIN deliverymen d ON d.deliveryman_id = dm.other_id AND dm.other_role = 'deliveryman'
+         LEFT JOIN customers c ON c.customer_id = dm.other_id AND dm.other_role = 'customer'
+         LEFT JOIN LATERAL (
+           SELECT message, sender_role, created_at
+           FROM delivery_messages
+           WHERE order_id IS NULL
+             AND (
+               (sender_role = dm.other_role AND sender_id = dm.other_id AND recipient_role = 'admin')
+               OR (sender_role = 'admin' AND recipient_role = dm.other_role AND recipient_id = dm.other_id)
+             )
+           ORDER BY message_id DESC
+           LIMIT 1
+         ) latest ON true
+         LEFT JOIN LATERAL (
+           SELECT COUNT(1) AS unread_count
+           FROM delivery_messages
+           WHERE order_id IS NULL
+             AND is_read = FALSE
+             AND recipient_role = 'admin'
+             AND sender_role = dm.other_role
+             AND sender_id = dm.other_id
+         ) unread ON true
+         ORDER BY latest.created_at DESC`
+      );
+
+      for (const row of adminSupportRes.rows) {
+        conversations.unshift({
+          type: "support",
+          order_id: null,
+          conversation_id: `support_${row.sender_role}_${row.sender_id}`,
+          recipient_role: row.sender_role,
+          recipient_id: row.sender_id,
+          title: `Appeal / Support (${row.sender_role.toUpperCase()})`,
+          other_party: `${row.sender_name} (${row.sender_role})`,
+          last_message: row.last_message,
+          last_sender_role: row.last_sender_role,
+          last_message_time: row.last_message_time,
+          unread_count: row.unread_count
+        });
+      }
+    }
+
+    return res.json(conversations);
+  } catch (e) {
+    console.error("Conversations list error:", e);
+    return res.status(500).json({ message: "Unable to retrieve conversations." });
+  }
+};
+
+// ==========================================
+// 4. GET MESSAGES
+// ==========================================
+exports.getMessages = async (req, res) => {
+  const { role, sub: userId } = req.user;
+  const orderId = req.query.orderId ? String(req.query.orderId) : null;
+  const recipientRole = req.query.recipientRole ? String(req.query.recipientRole) : null;
+  const recipientId = req.query.recipientId ? String(req.query.recipientId) : null;
+  const isSupport = req.query.support === "admin" || !orderId;
+
+  try {
+    // CASE A: Direct Support / Appeal Thread (order_id IS NULL)
+    if (isSupport && !orderId) {
+      let targetRole = recipientRole;
+      let targetId = recipientId;
+
+      if (role !== "admin") {
+        // User querying their direct messages with admin
+        const msgRes = await pool.query(
+          `SELECT message_id, order_id, sender_role, sender_id, recipient_role, recipient_id, message, is_read, created_at
+           FROM delivery_messages
+           WHERE order_id IS NULL
+             AND (
+               (sender_role = $1 AND sender_id = $2 AND recipient_role = 'admin')
+               OR (sender_role = 'admin' AND recipient_role = $1 AND recipient_id = $2)
+             )
+           ORDER BY message_id ASC`,
+          [role, userId]
+        );
+
+        // Mark as read for current user
+        const updateRes = await pool.query(
+          `UPDATE delivery_messages
+           SET is_read = TRUE
+           WHERE order_id IS NULL
+             AND is_read = FALSE
+             AND recipient_role = $1
+             AND recipient_id = $2`,
+          [role, userId]
+        );
+
+        if (updateRes.rowCount > 0) {
+          eventService.broadcast("message_read", { support: true, role, userId });
+        }
+        return res.json(msgRes.rows);
+      } else {
+        // Admin querying messages with a specific user
+        if (!targetRole || !targetId) {
+          return res.status(400).json({ message: "recipientRole and recipientId required for admin support messages." });
+        }
+
+        const msgRes = await pool.query(
+          `SELECT message_id, order_id, sender_role, sender_id, recipient_role, recipient_id, message, is_read, created_at
+           FROM delivery_messages
+           WHERE order_id IS NULL
+             AND (
+               (sender_role = 'admin' AND recipient_role = $1 AND recipient_id = $2)
+               OR (sender_role = $1 AND sender_id = $2 AND recipient_role = 'admin')
+             )
+           ORDER BY message_id ASC`,
+          [targetRole, targetId]
+        );
+
+        // Mark as read for Admin
+        const updateRes = await pool.query(
+          `UPDATE delivery_messages
+           SET is_read = TRUE
+           WHERE order_id IS NULL
+             AND is_read = FALSE
+             AND recipient_role = 'admin'
+             AND sender_role = $1
+             AND sender_id = $2`,
+          [targetRole, targetId]
+        );
+
+        if (updateRes.rowCount > 0) {
+          eventService.broadcast("message_read", { support: true, role: "admin", targetRole, targetId });
+        }
+        return res.json(msgRes.rows);
+      }
+    }
+
+    // CASE B: Order-based conversation
+    if (!validId(orderId)) {
+      return res.status(400).json({ message: "Valid orderId is required." });
+    }
+
+    const order = await checkOrderAccess(orderId, req.user);
+    if (!order) {
+      return res.status(403).json({ message: "You are not authorized to view messages for this order." });
+    }
+
+    let query = "";
+    let params = [];
+
+    if (recipientRole) {
+      // Filter by the specific participant pair
+      if (recipientRole === "admin") {
+        if (role === "admin") {
+          // Admin querying specific order participant
+          query = `
+            SELECT message_id, order_id, sender_role, sender_id, recipient_role, recipient_id, message, is_read, created_at
+            FROM delivery_messages
+            WHERE order_id = $1
+              AND (
+                (sender_role = 'admin' AND recipient_role = $2 AND recipient_id = $3)
+                OR (sender_role = $2 AND sender_id = $3 AND recipient_role = 'admin')
+              )
+            ORDER BY message_id ASC
+          `;
+          params = [orderId, recipientRole, recipientId];
+        } else {
+          // User querying messages with Admin for this order
+          query = `
+            SELECT message_id, order_id, sender_role, sender_id, recipient_role, recipient_id, message, is_read, created_at
+            FROM delivery_messages
+            WHERE order_id = $1
+              AND (
+                (sender_role = $2 AND sender_id = $3 AND recipient_role = 'admin')
+                OR (sender_role = 'admin' AND recipient_role = $2 AND recipient_id = $3)
+              )
+            ORDER BY message_id ASC
+          `;
+          params = [orderId, role, userId];
+        }
+      } else {
+        // Between two non-admin roles (e.g. customer <-> deliveryman, customer <-> seller, seller <-> deliveryman)
+        // or Admin with a specific role
+        query = `
+          SELECT message_id, order_id, sender_role, sender_id, recipient_role, recipient_id, message, is_read, created_at
+          FROM delivery_messages
+          WHERE order_id = $1
+            AND (
+              (sender_role = $2 AND (recipient_role = $3 OR recipient_role IS NULL))
+              OR (sender_role = $3 AND (recipient_role = $2 OR recipient_role IS NULL))
+            )
+          ORDER BY message_id ASC
+        `;
+        params = [orderId, role, recipientRole];
+      }
+    } else {
+      // Return all messages for this order visible to this user
+      query = `
+        SELECT message_id, order_id, sender_role, sender_id, recipient_role, recipient_id, message, is_read, created_at
+        FROM delivery_messages
+        WHERE order_id = $1
+        ORDER BY message_id ASC
+      `;
+      params = [orderId];
+    }
+
+    const result = await pool.query(query, params);
+
+    // Mark as read for current user
+    const updateRes = await pool.query(
+      `UPDATE delivery_messages
+       SET is_read = TRUE
+       WHERE order_id = $1
+         AND is_read = FALSE
+         AND (
+           (recipient_role = $2 AND (recipient_id = $3 OR recipient_id IS NULL))
+           OR (recipient_role IS NULL AND sender_role != $2)
+           OR ($2 = 'admin' AND sender_role != 'admin')
+         )`,
+      [orderId, role, userId]
+    );
+
+    if (updateRes.rowCount > 0) {
+      eventService.broadcast("message_read", { orderId, role, userId });
+    }
+    return res.json(result.rows);
+  } catch (e) {
+    console.error("Message list error:", e);
+    return res.status(500).json({ message: "Unable to retrieve messages." });
+  }
+};
+
+// ==========================================
+// 5. SEND MESSAGE
+// ==========================================
+exports.sendMessage = async (req, res) => {
+  const body = req.body || {};
+  const rawOrderId = body.order_id !== undefined ? body.order_id : body.orderId;
+  const rawRecipientRole = body.recipient_role !== undefined ? body.recipient_role : body.recipientRole;
+  const rawRecipientId = body.recipient_id !== undefined ? body.recipient_id : body.recipientId;
+  const message = body.message;
+
+  const cleanId = (val) => {
+    if (val === undefined || val === null || val === "null" || val === "") return null;
+    return String(val);
+  };
+
+  const orderId = cleanId(rawOrderId);
+  const { role, sub: userId } = req.user;
+
+  if (typeof message !== "string" || !message.trim() || message.trim().length > 2000) {
+    return res.status(400).json({ message: "A message of between 1 and 2000 characters is required." });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    // CASE A: Direct Support / Appeal message (order_id is NULL)
+    if (!orderId) {
+      let targetRole = rawRecipientRole ? String(rawRecipientRole).toLowerCase() : "admin";
+      let targetId = cleanId(rawRecipientId);
+
+      if (role !== "admin") {
+        // Non-admin can only message admin
+        targetRole = "admin";
+        targetId = null;
+      } else {
+        // Admin replying to user
+        if (!targetRole || !targetId || !validId(targetId)) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ message: "recipient_role and recipient_id are required when Admin sends direct messages." });
+        }
+      }
+
+      const insertRes = await client.query(
+        `INSERT INTO delivery_messages (order_id, sender_role, sender_id, recipient_role, recipient_id, message, is_read)
+         VALUES (NULL, $1, $2, $3, $4, $5, FALSE)
+         RETURNING message_id, order_id, sender_role, sender_id, recipient_role, recipient_id, message, is_read, created_at`,
+        [role, userId, targetRole, targetId, message.trim()]
+      );
+
+      const createdMsg = insertRes.rows[0];
+      const snippet = message.trim().length > 60 ? `${message.trim().slice(0, 57)}…` : message.trim();
+
+      if (targetRole === "admin") {
+        // Notify admins
+        await createAdminNotification(client, `New appeal/support message from ${role} (ID #${userId}): "${snippet}"`);
+      } else if (targetRole === "seller") {
+        await createSellerNotification(client, targetId, `New message from Admin: "${snippet}"`);
+      } else if (targetRole === "deliveryman") {
+        await createDeliverymanNotification(client, targetId, `New message from Admin: "${snippet}"`);
+      } else if (targetRole === "customer") {
+        await createCustomerNotification(client, targetId, `New message from Admin: "${snippet}"`);
+      }
+
+      await client.query("COMMIT");
+
+      eventService.broadcast("message_sent", {
+        orderId: null,
+        messageId: createdMsg.message_id,
+        senderRole: role,
+        senderId: userId,
+        recipientRole: targetRole,
+        recipientId: targetId
+      });
+      eventService.broadcast("notification_sent", { role: targetRole, recipientId: targetId });
+
+      return res.status(201).json(createdMsg);
+    }
+
+    // CASE B: Order-based message
+    if (!validId(orderId)) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ message: "Valid order_id is required." });
+    }
+
+    const order = await checkOrderAccess(orderId, req.user);
+    if (!order) {
+      await client.query("ROLLBACK");
+      return res.status(403).json({ message: "You are not authorized to send messages for this order." });
+    }
+
+    let targetRole = rawRecipientRole ? String(rawRecipientRole).toLowerCase() : null;
+    let targetId = cleanId(rawRecipientId);
+
+    // Validate authorized recipients for this order
+    if (!targetRole) {
+      // Fallback default participant
+      if (role === "customer") {
+        targetRole = order.deliveryman_id ? "deliveryman" : "admin";
+        targetId = order.deliveryman_id ? String(order.deliveryman_id) : null;
+      } else if (role === "deliveryman") {
+        targetRole = "customer";
+        targetId = String(order.customer_id);
+      } else if (role === "seller") {
+        targetRole = order.deliveryman_id ? "deliveryman" : "customer";
+        targetId = order.deliveryman_id ? String(order.deliveryman_id) : String(order.customer_id);
+      } else if (role === "admin") {
+        targetRole = "customer";
+        targetId = String(order.customer_id);
+      }
+    }
+
+    if (targetRole === "deliveryman") {
+      if (!order.deliveryman_id) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ message: "No deliveryman has been assigned to this order yet." });
+      }
+      targetId = String(order.deliveryman_id);
+    } else if (targetRole === "customer") {
+      if (role === "customer") {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ message: "You cannot message yourself." });
+      }
+      targetId = String(order.customer_id);
+    } else if (targetRole === "seller") {
+      if (role === "seller" && targetId === String(userId)) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ message: "You cannot message yourself." });
+      }
+      // Check seller is legitimate for this order
+      const sellerCheck = await client.query(
+        `SELECT 1 FROM order_items oi
+         JOIN products p ON p.product_id = oi.product_id
+         WHERE oi.order_id = $1 ${targetId ? "AND p.seller_id = $2" : ""}`,
+        targetId ? [orderId, targetId] : [orderId]
+      );
+      if (!sellerCheck.rowCount) {
+        await client.query("ROLLBACK");
+        return res.status(403).json({ message: "The selected seller is not associated with this order." });
+      }
+      if (!targetId) {
+        // If not specified, select the first seller in the order
+        const sRow = await client.query(
+          `SELECT p.seller_id FROM order_items oi JOIN products p ON p.product_id = oi.product_id WHERE oi.order_id = $1 LIMIT 1`,
+          [orderId]
+        );
+        targetId = String(sRow.rows[0].seller_id);
+      }
+    } else if (targetRole === "admin") {
+      // Any order participant can message admin
+      targetId = null;
+    } else {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ message: `Invalid recipient role: ${targetRole}` });
+    }
+
+    const insertRes = await client.query(
+      `INSERT INTO delivery_messages (order_id, sender_role, sender_id, recipient_role, recipient_id, message, is_read)
+       VALUES ($1, $2, $3, $4, $5, $6, FALSE)
+       RETURNING message_id, order_id, sender_role, sender_id, recipient_role, recipient_id, message, is_read, created_at`,
+      [orderId, role, userId, targetRole, targetId, message.trim()]
+    );
+
+    const createdMsg = insertRes.rows[0];
+    const snippet = message.trim().length > 50 ? `${message.trim().slice(0, 47)}…` : message.trim();
+    const notifText = `New message from ${role} on Order #${orderId}: "${snippet}"`;
+
+    if (targetRole === "deliveryman" && targetId) {
+      await createDeliverymanNotification(client, targetId, notifText);
+    } else if (targetRole === "customer" && targetId) {
+      await createCustomerNotification(client, targetId, notifText);
+    } else if (targetRole === "seller" && targetId) {
+      await createSellerNotification(client, targetId, notifText);
+    } else if (targetRole === "admin") {
+      await createAdminNotification(client, notifText);
+    }
+
+    await client.query("COMMIT");
+
+    eventService.broadcast("message_sent", {
+      orderId,
+      messageId: createdMsg.message_id,
+      senderRole: role,
+      senderId: userId,
+      recipientRole: targetRole,
+      recipientId: targetId
+    });
+    eventService.broadcast("notification_sent", { role: targetRole, recipientId: targetId });
+
+    return res.status(201).json(createdMsg);
+  } catch (e) {
+    try { await client.query("ROLLBACK"); } catch (_) {}
+    console.error("Message send error:", e);
+    return res.status(500).json({ message: "Unable to send message." });
+  } finally {
+    client.release();
+  }
+};
+
+// ==========================================
+// 6. MARK AS READ
+// ==========================================
+exports.markAsRead = async (req, res) => {
+  const { orderId, recipientRole, recipientId } = req.body || {};
+  const { role, sub: userId } = req.user;
+
+  try {
+    if (orderId && validId(String(orderId))) {
+      await pool.query(
+        `UPDATE delivery_messages
+         SET is_read = TRUE
+         WHERE order_id = $1
+           AND is_read = FALSE
+           AND (
+             (recipient_role = $2 AND (recipient_id = $3 OR recipient_id IS NULL))
+             OR (recipient_role IS NULL AND sender_role != $2)
+             OR ($2 = 'admin' AND sender_role != 'admin')
+           )`,
+        [orderId, role, userId]
+      );
+      eventService.broadcast("message_read", { orderId, role, userId });
+    } else {
+      // Direct support read
+      if (role === "admin") {
+        await pool.query(
+          `UPDATE delivery_messages
+           SET is_read = TRUE
+           WHERE order_id IS NULL
+             AND is_read = FALSE
+             AND recipient_role = 'admin'
+             ${recipientRole ? "AND sender_role = $1" : ""}
+             ${recipientId ? "AND sender_id = $2" : ""}`,
+          recipientRole && recipientId ? [recipientRole, recipientId] : []
+        );
+      } else {
+        await pool.query(
+          `UPDATE delivery_messages
+           SET is_read = TRUE
+           WHERE order_id IS NULL
+             AND is_read = FALSE
+             AND recipient_role = $1
+             AND recipient_id = $2`,
+          [role, userId]
+        );
+      }
+      eventService.broadcast("message_read", { support: true, role, userId });
+    }
+
+    return res.json({ message: "Messages marked as read." });
+  } catch (e) {
+    console.error("Mark read error:", e);
+    return res.status(500).json({ message: "Unable to mark messages as read." });
+  }
+};

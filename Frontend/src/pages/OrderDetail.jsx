@@ -1,0 +1,130 @@
+import { useEffect, useState } from "react";
+import Spinner from "../components/Spinner";
+import ErrorState from "../components/ErrorState";
+import StatusBadge from "../components/StatusBadge";
+import ProductImage from "../components/ProductImage";
+import { getOrder, cancelOrder } from "../services/orderService";
+import { useToast } from "../context/ToastContext";
+import { navigate } from "../utils/router";
+import DeliveryChat from "../components/DeliveryChat";
+import { useLiveSync } from "../hooks/useLiveSync";
+
+const money = (value) => `$${Number(value).toFixed(2)}`;
+const formatDate = (value) => new Date(value).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+
+const STEPS = ["Pending", "Processing", "Shipped", "Delivered"];
+
+export default function OrderDetail({ orderId }) {
+  const { showToast } = useToast();
+  const [order, setOrder] = useState(null);
+  const [status, setStatus] = useState("loading");
+  const [error, setError] = useState("");
+  const [cancelling, setCancelling] = useState(false);
+
+  function load(silent = false) {
+    if (!silent) setStatus("loading");
+    getOrder(orderId)
+      .then((data) => { setOrder(data); setStatus("ready"); })
+      .catch((requestError) => { if (!silent) { setError(requestError.message); setStatus("error"); } });
+  }
+
+  useEffect(() => { load(false); }, [orderId]);
+
+  useLiveSync(["order_updated"], (payload) => {
+    if (!payload || !payload.orderId || String(payload.orderId) === String(orderId)) {
+      load(true);
+    }
+  }, 3500);
+
+  async function handleCancel() {
+    setCancelling(true);
+    try {
+      await cancelOrder(orderId);
+      showToast("Order cancelled");
+      load();
+    } catch (requestError) {
+      showToast(requestError.message, "error");
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  if (status === "loading") return <Spinner label="Loading order…" />;
+  if (status === "error") return <ErrorState message={error} onRetry={load} />;
+
+  const currentStepIndex = STEPS.indexOf(order.status);
+
+  return (
+    <section className="order-detail-page">
+      <button className="back-link" onClick={() => navigate("/orders")}>← Back to orders</button>
+
+      <div className="products-heading">
+        <div>
+          <p className="eyebrow">Order #{order.order_id}</p>
+          <h1>Placed on {formatDate(order.order_date)}</h1>
+        </div>
+        <StatusBadge status={order.status} />
+      </div>
+
+      {order.status === "Cancelled" ? (
+        <p className="message error">This order was cancelled.</p>
+      ) : (
+        <ol className="order-tracker">
+          {STEPS.map((step, index) => (
+            <li key={step} className={index <= currentStepIndex ? "tracker-step done" : "tracker-step"}>
+              <span className="tracker-dot" />
+              {step}
+            </li>
+          ))}
+        </ol>
+      )}
+
+      <ul className="order-item-list">
+        {order.items.map((item) => (
+          <li key={item.order_item_id} className="cart-item">
+            <ProductImage src={item.product_image} alt={item.product_name} />
+            <div className="cart-item-info">
+              <h3>{item.product_name}</h3>
+              <p className="cart-item-price">{money(item.price)} × {item.quantity}</p>
+            </div>
+            <strong className="cart-item-subtotal">{money(item.subtotal)}</strong>
+          </li>
+        ))}
+      </ul>
+
+      <aside className="order-summary">
+        <h2>Order details</h2>
+        <div className="summary-row"><span>Payment method</span><span>{order.payment_method}</span></div>
+        <div className="summary-row"><span>Shipping address</span><span>{order.shipping_address}</span></div>
+        {order.deliveryman_name ? (
+          <div className="delivery-details">
+            <strong>Deliveryman</strong>
+            <span>{order.deliveryman_name}</span>
+            <span>{order.deliveryman_phone}</span>
+            <span>Status: {order.delivery_status?.replaceAll("_", " ")}</span>
+            <span>ETA: {order.estimated_delivery_time ? new Date(order.estimated_delivery_time).toLocaleString() : "Not set yet"}</span>
+          </div>
+        ) : (
+          <p className="hint">Deliveryman will be assigned shortly.</p>
+        )}
+        {order.delivery_latitude !== null && order.delivery_longitude !== null && (
+          <div className="delivery-details">
+            <strong>Delivery location</strong>
+            <span>Latitude: {Number(order.delivery_latitude).toFixed(6)}</span>
+            <span>Longitude: {Number(order.delivery_longitude).toFixed(6)}</span>
+          </div>
+        )}
+        <div className="summary-row summary-total"><span>Total</span><span>{money(order.total_amount)}</span></div>
+        {order.status === "Pending" && (
+          <button className="text-button remove-link" onClick={handleCancel} disabled={cancelling}>
+            {cancelling ? "Cancelling…" : "Cancel this order"}
+          </button>
+        )}
+      </aside>
+
+      <div className="order-delivery-chat-section">
+        <DeliveryChat orderId={orderId} />
+      </div>
+    </section>
+  );
+}
