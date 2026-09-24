@@ -1,12 +1,12 @@
 const pool = require("../db");
-const { createCustomerNotification } = require("../services/notificationService");
+const { createCustomerNotification, createDeliverymanNotification } = require("../services/notificationService");
 
 const editableProductFields = ["name", "description", "price", "stock", "image", "category_id"];
-const supportedOrderStatuses = ["Pending", "Processing", "Shipped", "Delivered", "Cancelled"];
+const supportedOrderStatuses = ["Pending", "Processing", "Shipped"];
 const sellerStatusTransitions = {
     Pending: ["Processing"],
     Processing: ["Shipped"],
-    Shipped: ["Delivered"],
+    Shipped: [],
     Delivered: [],
     Cancelled: []
 };
@@ -168,12 +168,17 @@ exports.getSellerOrders = async (req, res) => {
     try {
         const result = await pool.query(
             `SELECT
-                o.order_id, o.order_date, o.total_amount, o.payment_method, o.shipping_address, o.status,
+                o.order_id, o.order_date, o.total_amount, o.payment_method, o.shipping_address, o.status, o.delivery_status, o.deliveryman_id,
+                d.name AS deliveryman_name, d.phone AS deliveryman_phone,
+                dr.status AS delivery_request_status, rd.name AS requested_deliveryman_name,
                 c.customer_id, c.name AS customer_name, c.email AS customer_email,
                 oi.order_item_id, oi.product_id, oi.quantity, oi.price,
                 p.name AS product_name, p.image AS product_image
              FROM orders o
              INNER JOIN customers c ON c.customer_id = o.customer_id
+             LEFT JOIN deliverymen d ON d.deliveryman_id = o.deliveryman_id
+             LEFT JOIN LATERAL (SELECT status, deliveryman_id FROM delivery_requests WHERE order_id=o.order_id ORDER BY delivery_request_id DESC LIMIT 1) dr ON TRUE
+             LEFT JOIN deliverymen rd ON rd.deliveryman_id = dr.deliveryman_id
              INNER JOIN order_items oi ON oi.order_id = o.order_id
              INNER JOIN products p ON p.product_id = oi.product_id
              WHERE p.seller_id = $1
@@ -192,6 +197,12 @@ exports.getSellerOrders = async (req, res) => {
                     payment_method: row.payment_method,
                     shipping_address: row.shipping_address,
                     status: row.status,
+                    delivery_status: row.delivery_status,
+                    deliveryman_id: row.deliveryman_id,
+                    deliveryman_name: row.deliveryman_name,
+                    deliveryman_phone: row.deliveryman_phone,
+                    delivery_request_status: row.delivery_request_status,
+                    requested_deliveryman_name: row.requested_deliveryman_name,
                     customer: {
                         customer_id: row.customer_id,
                         name: row.customer_name,
@@ -214,6 +225,38 @@ exports.getSellerOrders = async (req, res) => {
     } catch (error) {
         return sendSellerError(error, res);
     }
+};
+
+exports.getAvailableDeliverymen = async (req, res) => {
+    if (!requireSeller(req, res)) return;
+    try {
+        const result = await pool.query(`SELECT deliveryman_id, name, phone, delivery_location
+            FROM deliverymen WHERE approval_status = 'approved' AND availability_status = 'available'
+            ORDER BY name, deliveryman_id`);
+        return res.json(result.rows);
+    } catch (error) { return sendSellerError(error, res); }
+};
+
+exports.sendDeliveryRequest = async (req, res) => {
+    if (!requireSeller(req, res)) return;
+    const { orderId } = req.params;
+    const deliverymanId = String(req.body?.deliveryman_id || "");
+    if (!isValidId(orderId) || !isValidId(deliverymanId)) return res.status(400).json({ message: "A valid orderId and deliveryman_id are required." });
+    const client = await pool.connect();
+    try {
+        await client.query("BEGIN");
+        const order = await client.query(`SELECT o.order_id, o.status, o.deliveryman_id FROM orders o WHERE o.order_id=$1 FOR UPDATE`, [orderId]);
+        if (!order.rowCount) { await client.query("ROLLBACK"); return res.status(404).json({ message: "Order not found." }); }
+        const ownsOrder = await client.query(`SELECT 1 FROM order_items oi JOIN products p ON p.product_id=oi.product_id WHERE oi.order_id=$1 AND p.seller_id=$2 LIMIT 1`, [orderId, req.user.sub]);
+        if (!ownsOrder.rowCount) { await client.query("ROLLBACK"); return res.status(403).json({ message: "You are not authorized to manage this order." }); }
+        if (order.rows[0].status !== "Shipped" || order.rows[0].deliveryman_id) { await client.query("ROLLBACK"); return res.status(409).json({ message: "Only unassigned Shipped orders can receive a delivery request." }); }
+        const driver = await client.query(`SELECT deliveryman_id, name FROM deliverymen WHERE deliveryman_id=$1 AND approval_status='approved' AND availability_status='available' FOR UPDATE`, [deliverymanId]);
+        if (!driver.rowCount) { await client.query("ROLLBACK"); return res.status(409).json({ message: "That deliveryman is no longer available." }); }
+        await client.query("UPDATE delivery_requests SET status='cancelled', responded_at=CURRENT_TIMESTAMP WHERE order_id=$1 AND status='pending'", [orderId]);
+        const request = await client.query(`INSERT INTO delivery_requests (order_id, seller_id, deliveryman_id, status) VALUES ($1,$2,$3,'pending') RETURNING delivery_request_id, order_id, deliveryman_id, status, created_at`, [orderId, req.user.sub, deliverymanId]);
+        await createDeliverymanNotification(client, deliverymanId, `Delivery request for Order #${orderId} from a seller. Review it in your delivery dashboard.`);
+        await client.query("COMMIT"); return res.status(201).json({ message: "Delivery request sent.", request: request.rows[0] });
+    } catch (error) { try { await client.query("ROLLBACK"); } catch (_) {} return sendSellerError(error, res); } finally { client.release(); }
 };
 
 exports.updateSellerOrderStatus = async (req, res) => {
@@ -286,4 +329,3 @@ exports.updateSellerOrderStatus = async (req, res) => {
         client.release();
     }
 };
-122002662006200                                                                                                                           

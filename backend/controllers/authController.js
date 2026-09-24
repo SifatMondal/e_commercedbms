@@ -3,10 +3,11 @@ const jwt = require("jsonwebtoken");
 const pool = require("../db");
 
 const BCRYPT_SALT_ROUNDS = 12;
-const validRoles = ["customer", "seller"];
+const publicRoles = ["customer", "seller", "deliveryman"];
+const loginRoles = ["customer", "seller", "deliveryman", "admin"];
 
 function validateRole(role) {
-    return typeof role === "string" && validRoles.includes(role.toLowerCase());
+    return typeof role === "string" && publicRoles.includes(role.toLowerCase());
 }
 
 function validateRegistration(body) {
@@ -15,7 +16,7 @@ function validateRegistration(body) {
     const requiredFields = ["role", "name", "email", "phone", "password"];
     const missingFields = requiredFields.filter((field) => body[field] === undefined || body[field] === null || body[field] === "");
     if (missingFields.length > 0) return `Missing required fields: ${missingFields.join(", ")}.`;
-    if (!validateRole(body.role)) return "role must be either customer or seller.";
+    if (!validateRole(body.role)) return "role must be customer, seller, or deliveryman.";
     if (typeof body.name !== "string" || body.name.trim() === "" || body.name.trim().length > 150) return "name must be a non-empty string of at most 150 characters.";
     if (typeof body.email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email.trim()) || body.email.trim().length > 254) return "email must be a valid email address.";
     if (typeof body.phone !== "string" || body.phone.trim() === "" || body.phone.trim().length > 30) return "phone must be a non-empty string of at most 30 characters.";
@@ -30,7 +31,9 @@ function createSafeUser(row, role) {
         role,
         name: row.name,
         email: row.email,
-        phone: row.phone
+        phone: row.phone,
+        ...(["seller", "deliveryman"].includes(role) ? { approval_status: row.approval_status } : {}),
+        ...(role === "deliveryman" ? { availability_status: row.availability_status } : {})
     };
 }
 
@@ -53,11 +56,15 @@ function ensureJwtIsConfigured(res) {
 
 async function findAccountByEmail(email) {
     const result = await pool.query(
-        `SELECT id, name, email, phone, password, role
+        `SELECT id, name, email, phone, password, approval_status, availability_status, role
          FROM (
-             SELECT customer_id AS id, name, email, phone, password, 'customer' AS role FROM customers WHERE email = $1
+             SELECT customer_id AS id, name, email, phone, password, NULL::VARCHAR AS approval_status, NULL::VARCHAR AS availability_status, 'customer' AS role FROM customers WHERE email = $1
              UNION ALL
-             SELECT seller_id AS id, name, email, phone, password, 'seller' AS role FROM sellers WHERE email = $1
+             SELECT seller_id AS id, name, email, phone, password, approval_status, NULL::VARCHAR AS availability_status, 'seller' AS role FROM sellers WHERE email = $1
+             UNION ALL
+             SELECT deliveryman_id AS id, name, email, phone, password, approval_status, availability_status, 'deliveryman' AS role FROM deliverymen WHERE email = $1
+             UNION ALL
+             SELECT admin_id AS id, name, email, NULL::VARCHAR AS phone, password, NULL::VARCHAR AS approval_status, NULL::VARCHAR AS availability_status, 'admin' AS role FROM admins WHERE email = $1
          ) AS accounts`,
         [email]
     );
@@ -83,17 +90,23 @@ exports.register = async (req, res) => {
             ? `INSERT INTO customers (name, email, password, phone)
                VALUES ($1, $2, $3, $4)
                RETURNING customer_id AS id, name, email, phone`
-            : `INSERT INTO sellers (name, email, phone, password)
-               VALUES ($1, $2, $3, $4)
-               RETURNING seller_id AS id, name, email, phone`;
+            : role === "seller" ? `INSERT INTO sellers (name, email, phone, password, approval_status)
+               VALUES ($1, $2, $3, $4, 'pending')
+               RETURNING seller_id AS id, name, email, phone, approval_status, NULL::VARCHAR AS availability_status`
+            : `INSERT INTO deliverymen (name, email, phone, password, delivery_location, approval_status, availability_status)
+               VALUES ($1, $2, $3, $4, $5, 'pending', 'offline')
+               RETURNING deliveryman_id AS id, name, email, phone, approval_status, availability_status`;
         const values = role === "customer"
             ? [name, email, passwordHash, phone]
-            : [name, email, phone, passwordHash];
+            : role === "seller" ? [name, email, phone, passwordHash] : [name, email, phone, passwordHash, typeof req.body.delivery_location === "string" ? req.body.delivery_location.trim() || null : null];
         const result = await pool.query(query, values);
         const user = createSafeUser(result.rows[0], role);
         const token = signToken(user);
 
-        return res.status(201).json({ message: "Registration successful.", token, user });
+        const message = ["seller", "deliveryman"].includes(role)
+            ? `${role[0].toUpperCase() + role.slice(1)} account created successfully. Your account is awaiting admin approval.`
+            : "Registration successful.";
+        return res.status(201).json({ message, token, user });
     } catch (error) {
         console.error("Registration error:", error);
         if (error.code === "23505") return res.status(409).json({ message: "An account with this email already exists." });
@@ -105,7 +118,7 @@ exports.register = async (req, res) => {
 exports.login = async (req, res) => {
     if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) return res.status(400).json({ message: "Request body must be a JSON object." });
     const { role, email, password } = req.body;
-    if (!validateRole(role)) return res.status(400).json({ message: "role must be either customer or seller." });
+    if (typeof role !== "string" || !loginRoles.includes(role.toLowerCase())) return res.status(400).json({ message: "role must be customer, seller, deliveryman, or admin." });
     if (typeof email !== "string" || email.trim() === "" || typeof password !== "string" || password === "") {
         return res.status(400).json({ message: "email and password are required." });
     }
@@ -116,7 +129,16 @@ exports.login = async (req, res) => {
         const accounts = await findAccountByEmail(email.trim().toLowerCase());
         const account = accounts.find((candidate) => candidate.role === roleName);
         if (!account || !(await bcrypt.compare(password, account.password))) {
-            return res.status(401).json({ message: "Invalid email, password, or role." });
+            return res.status(401).json({ message: "Invalid credentials." });
+        }
+
+        // Approval is read from PostgreSQL, after credentials are verified. It is
+        // never accepted from the request body and unapproved sellers get no JWT.
+        if (["seller", "deliveryman"].includes(roleName) && account.approval_status === "pending") {
+            return res.status(403).json({ message: `Your ${roleName} account is awaiting admin approval. Please wait until an admin approves your account.` });
+        }
+        if (["seller", "deliveryman"].includes(roleName) && account.approval_status === "rejected") {
+            return res.status(403).json({ message: `Your ${roleName} account has been rejected by the admin.` });
         }
 
         const user = createSafeUser(account, roleName);

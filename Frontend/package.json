@@ -1,5 +1,5 @@
 {
-  "name": "e-commerce-auth-frontend",
+  "name": "e-commerce-frontend",
   "private": true,
   "version": "1.0.0",
   "type": "module",
@@ -10,9 +10,10 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
-    "vite": "latest",
+    "leaflet": "^1.9.4",
     "react": "latest",
-    "react-dom": "latest"
-  },
-  "devDependencies": {}
+    "react-dom": "latest",
+    "react-leaflet": "^5.0.0",
+    "vite": "latest"
+  }
 }

@@ -7,6 +7,7 @@ function isValidId(value) {
 function recipientColumn(role) {
     if (role === "customer") return "customer_id";
     if (role === "seller") return "seller_id";
+    if (role === "deliveryman") return "deliveryman_id";
     return null;
 }
 

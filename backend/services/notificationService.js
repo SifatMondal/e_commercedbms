@@ -30,4 +30,15 @@ async function createSellerNotification(client, sellerId, message) {
     return result.rows[0];
 }
 
-module.exports = { createCustomerNotification, createSellerNotification };
+async function createDeliverymanNotification(client, deliverymanId, message) {
+    validateRecipientId(deliverymanId, "deliveryman");
+    const result = await client.query(
+        `INSERT INTO notifications (message, notification_date, status, customer_id, seller_id, deliveryman_id)
+         VALUES ($1, CURRENT_DATE, 'Unread', NULL, NULL, $2)
+         RETURNING notification_id, message, notification_date, status, deliveryman_id`,
+        [message.trim(), deliverymanId]
+    );
+    return result.rows[0];
+}
+
+module.exports = { createCustomerNotification, createSellerNotification, createDeliverymanNotification };

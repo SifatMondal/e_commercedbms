@@ -9,6 +9,9 @@ const sellerRoutes = require("./routes/sellerRoutes");
 const reviewRoutes = require("./routes/reviewRoutes");
 const productReviewRoutes = reviewRoutes.productReviewRoutes;
 const notificationRoutes = require("./routes/notificationRoutes");
+const adminRoutes = require("./routes/adminRoutes");
+const deliveryRoutes = require("./routes/deliveryRoutes");
+const deliveryMessageRoutes = require("./routes/deliveryMessageRoutes");
 
 const app = express();
 
@@ -47,6 +50,9 @@ app.use("/api/orders", orderRoutes);
 app.use("/api/seller", sellerRoutes);
 app.use("/api/reviews", reviewRoutes);
 app.use("/api/notifications", notificationRoutes);
+app.use("/api/admin", adminRoutes);
+app.use("/api/delivery", deliveryRoutes);
+app.use("/api/delivery-messages", deliveryMessageRoutes);
 
 // Keep malformed JSON responses consistent with the API's JSON error format.
 app.use((error, req, res, next) => {
